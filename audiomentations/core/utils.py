@@ -2,6 +2,8 @@ import math
 import os
 from pathlib import Path
 
+import numpy as np
+
 
 def get_file_paths(
     root_path,
@@ -49,3 +51,10 @@ def calculate_desired_noise_rms(clean_rms, snr):
     a = float(snr) / 20
     noise_rms = clean_rms / (10 ** a)
     return noise_rms
+
+
+def convert_float_samples_to_int16(y):
+    """Convert floating-point numpy array of audio samples to int16."""
+    if not issubclass(y.dtype.type, np.floating):
+        raise ValueError("input samples not floating-point")
+    return (y * np.iinfo(np.int16).max).astype(np.int16)

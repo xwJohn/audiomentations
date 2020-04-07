@@ -3,6 +3,7 @@ black
 coverage==4.5.2
 librosa>=0.6.1,<=0.7.2
 numpy>=1.13.0
+pydub==0.23.1
 pytest==4.6.3
 pytest-cov==2.7.1
 scipy>=1.0.0,<2

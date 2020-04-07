@@ -17,7 +17,9 @@ from audiomentations import (
     Resample,
     ClippingDistortion,
     AddBackgroundNoise,
-    AddShortNoises)
+    AddShortNoises,
+    Mp3Compression,
+)
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -32,7 +34,8 @@ def load_wav_file(sound_file_path):
 
     if sound_np.dtype != np.float32:
         assert sound_np.dtype == np.int16
-        sound_np = sound_np / 32767  # ends up roughly between -1 and 1
+        # ends up roughly between -1 and 1
+        sound_np = np.divide(sound_np, 32767, dtype=np.float32)
 
     return sound_np
 
@@ -48,6 +51,8 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     samples = load_wav_file(os.path.join(DEMO_DIR, "acoustic_guitar_0.wav"))
+
+    assert samples.dtype == np.float32
 
     # AddImpulseResponse
     augmenter = Compose(
@@ -189,4 +194,14 @@ if __name__ == "__main__":
             output_dir, "AddShortNoises_{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
+        wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
+
+    # Mp3Compression
+    augmenter = Compose([Mp3Compression(p=1.0)])
+    for i in range(5):
+        output_file_path = os.path.join(
+            output_dir, "Mp3Compression_{:03d}.wav".format(i)
+        )
+        augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
+        print(augmenter.transforms[0].parameters)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
