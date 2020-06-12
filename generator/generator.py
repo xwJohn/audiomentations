@@ -32,8 +32,7 @@ SAMPLE_RATE = 16000
 RECORD_SECONDS = 1
 RECORD_TIMES = 5    # how many times need to record
 
-rec_files = ["开灯","关灯"]
-#rec_files = ["开灯","关灯","绿色","蓝色","红色","温度","湿度","气压","亮度"]
+rec_files = ["开灯","关灯","绿色","蓝色","红色","温度","湿度","气压","亮度"]
 
 DEMO_DIR = os.path.dirname(__file__)
 
