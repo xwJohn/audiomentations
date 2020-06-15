@@ -124,7 +124,7 @@ def generator(wave_file,output_dir):
     #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # Shift without rollover
-    augmenter = Compose([Shift(min_fraction=-0.5, max_fraction=0.5, rollover=False, p=1.0)]
+    augmenter = Compose([Shift(min_fraction=-0.2, max_fraction=0.2, rollover=False, p=1.0)]
     )
     for i in range(10):
         output_file_path = os.path.join(
@@ -198,15 +198,14 @@ def rec(file_name, num=1):
 
     frames = []
     for x in range(num):
+        file = file_name + '/' + file_name.split('/')[2] + '_' + str(x) + '.wav'
+        print("按Enter后开始录音......%s"%file)
+        input()
         stream = p.open(format=FORMAT,
                         channels=CHANNELS,
                         rate=SAMPLE_RATE,
                         input=True,
-                        frames_per_buffer=CHUNK)
-
-        file = file_name + str(x) + '.wav'
-        print("按Enter后开始录音......%s"%file)
-        input()
+                        frames_per_buffer=CHUNK)        
         frames.clear()
         for i in range(0, int(SAMPLE_RATE / CHUNK * RECORD_SECONDS)):
             data = stream.read(CHUNK)
@@ -242,10 +241,11 @@ def main(record=True, generate=True):
             in_folder = in_path + name
             out_folder = out_path + name
             os.makedirs(out_folder,exist_ok=True)
+            print("=====Entering...%s====="%in_folder)
             #generate audio file
             filenames = os.listdir(in_folder)
             for filename in filenames:
                 generator(os.path.join(in_folder, filename), out_folder)
 
 if __name__ == "__main__":
-    main(False)
+    main(False, True)
