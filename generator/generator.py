@@ -31,7 +31,7 @@ CHANNELS = 1
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 1
 RECORD_TIMES = 5    # how many times need to record
-
+label = '_zy_'
 rec_files = ["开灯","关灯","绿色","蓝色","红色","温度","湿度","气压","亮度"]
 
 DEMO_DIR = os.path.dirname(__file__)
@@ -61,32 +61,31 @@ def generator(wave_file,output_dir):
         [AddImpulseResponse(p=1.0, ir_path=os.path.join(DEMO_DIR, "ir"))]
     )
     output_file_path = os.path.join(
-        output_dir, _filename + "_AddImpulseResponse_{:03d}.wav".format(0)
+        output_dir, _filename + label + "_AddImpulseResponse{:03d}.wav".format(0)
     )
     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
-
     # FrequencyMask
-    augmenter = Compose([FrequencyMask(p=1.0)])
-    for i in range(5):
-        output_file_path = os.path.join(
-            output_dir, _filename + "_FrequencyMask_{:03d}.wav".format(i)
-        )
-        augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
-        wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
+    # augmenter = Compose([FrequencyMask(p=1.0)])
+    # for i in range(5):
+    #     output_file_path = os.path.join(
+    #         output_dir, _filename + label + "_FrequencyMask{:03d}.wav".format(i)
+    #     )
+    #     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
+    #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # TimeMask
     # augmenter = Compose([TimeMask(p=1.0)])
     # for i in range(5):
-    #     output_file_path = os.path.join(output_dir, _filename + "_TimeMask_{:03d}.wav".format(i))
+    #     output_file_path = os.path.join(output_dir, _filename + label + "_TimeMask{:03d}.wav".format(i))
     #     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
     #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # AddGaussianSNR
     augmenter = Compose([AddGaussianSNR(p=1.0)])
-    for i in range(5):
+    for i in range(10):
         output_file_path = os.path.join(
-            output_dir, _filename + "_AddGaussianSNR_{:03d}.wav".format(i)
+            output_dir, _filename + label + "_AddGaussianSNR{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
@@ -95,9 +94,9 @@ def generator(wave_file,output_dir):
     augmenter = Compose(
         [AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=1.0)]
     )
-    for i in range(5):
+    for i in range(10):
         output_file_path = os.path.join(
-            output_dir, _filename + "_AddGaussianNoise_{:03d}.wav".format(i)
+            output_dir, _filename + label + "_AddGaussianNoise{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
@@ -105,62 +104,62 @@ def generator(wave_file,output_dir):
     # TimeStretch
     augmenter = Compose([TimeStretch(min_rate=0.5, max_rate=1.5, p=1.0)])
     for i in range(10):
-        output_file_path = os.path.join(output_dir, _filename + "_TimeStretch_{:03d}.wav".format(i))
+        output_file_path = os.path.join(output_dir, _filename + label + "_TimeStretch{:03d}.wav".format(i))
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # PitchShift
-    augmenter = Compose([PitchShift(min_semitones=-12, max_semitones=12, p=1.0)])
-    for i in range(10):
-        output_file_path = os.path.join(output_dir, _filename + "_PitchShift_{:03d}.wav".format(i))
+    augmenter = Compose([PitchShift(min_semitones=-6, max_semitones=12, p=1.0)])
+    for i in range(20):
+        output_file_path = os.path.join(output_dir, _filename + label + "_PitchShift{:03d}.wav".format(i))
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # Shift
     # augmenter = Compose([Shift(min_fraction=-0.5, max_fraction=0.5, p=1.0)])
     # for i in range(10):
-    #     output_file_path = os.path.join(output_dir, _filename + "_Shift_{:03d}.wav".format(i))
+    #     output_file_path = os.path.join(output_dir, _filename + label + "_Shift{:03d}.wav".format(i))
     #     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
     #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # Shift without rollover
     augmenter = Compose([Shift(min_fraction=-0.2, max_fraction=0.2, rollover=False, p=1.0)]
     )
-    for i in range(10):
+    for i in range(20):
         output_file_path = os.path.join(
-            output_dir, _filename + "_ShiftWithoutRollover_{:03d}.wav".format(i)
+            output_dir, _filename + label + "_ShiftWithoutRollover{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # Normalize
     augmenter = Compose([Normalize(p=1.0)])
-    output_file_path = os.path.join(output_dir, _filename + "_Normalize_{:03d}.wav".format(0))
+    output_file_path = os.path.join(output_dir, _filename + label + "_Normalize{:03d}.wav".format(0))
     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # Resample
-    augmenter = Compose([Resample(min_sample_rate=12000, max_sample_rate=44100, p=1.0)])
-    for i in range(10):
-        output_file_path = os.path.join(output_dir, _filename + "_Resample_{:03d}.wav".format(i))
-        augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
-        wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
+    # augmenter = Compose([Resample(min_sample_rate=12000, max_sample_rate=44100, p=1.0)])
+    # for i in range(10):
+    #     output_file_path = os.path.join(output_dir, _filename + label + "_Resample{:03d}.wav".format(i))
+    #     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
+    #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # ClippingDistortion
-    augmenter = Compose([ClippingDistortion(max_percentile_threshold=20,p=1.0)])
-    for i in range(10):
-        output_file_path = os.path.join(
-            output_dir, _filename + "_ClippingDistortion_{:03d}.wav".format(i)
-        )
-        augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
-        wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
+    # augmenter = Compose([ClippingDistortion(max_percentile_threshold=20,p=1.0)])
+    # for i in range(10):
+    #     output_file_path = os.path.join(
+    #         output_dir, _filename + label + "_ClippingDistortion{:03d}.wav".format(i)
+    #     )
+    #     augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
+    #     wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
 
     # AddBackgroundNoise
     augmenter = Compose(
         [AddBackgroundNoise(sounds_path=os.path.join(DEMO_DIR, "background_noises"), p=1.0)])
-    for i in range(10):
+    for i in range(20):
         output_file_path = os.path.join(
-            output_dir, _filename + "_AddBackgroundNoise_{:03d}.wav".format(i)
+            output_dir, _filename + label + "_AddBackgroundNoise{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
@@ -185,9 +184,9 @@ def generator(wave_file,output_dir):
             )
         ]
     )
-    for i in range(10):
+    for i in range(20):
         output_file_path = os.path.join(
-            output_dir, _filename + "_AddShortNoises_{:03d}.wav".format(i)
+            output_dir, _filename + label + "_AddShortNoises{:03d}.wav".format(i)
         )
         augmented_samples = augmenter(samples=samples, sample_rate=SAMPLE_RATE)
         wavfile.write(output_file_path, rate=SAMPLE_RATE, data=augmented_samples)
@@ -198,7 +197,7 @@ def rec(file_name, num=1):
 
     frames = []
     for x in range(num):
-        file = file_name + '/' + file_name.split('/')[2] + '_' + str(x) + '.wav'
+        file = file_name + '/' + file_name.split('/')[2] + label + str(x) + '.wav'
         print("按Enter后开始录音......%s"%file)
         input()
         stream = p.open(format=FORMAT,
@@ -221,7 +220,6 @@ def rec(file_name, num=1):
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(b''.join(frames))
         wf.close()
-
     p.terminate()
 
 
@@ -248,4 +246,4 @@ def main(record=True, generate=True):
                 generator(os.path.join(in_folder, filename), out_folder)
 
 if __name__ == "__main__":
-    main(False, True)
+    main(True, True)
