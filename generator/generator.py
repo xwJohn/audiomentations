@@ -206,11 +206,14 @@ def rec(file_name, num=1):
                         input=True,
                         frames_per_buffer=CHUNK)        
         frames.clear()
-        for i in range(0, int(SAMPLE_RATE / CHUNK * RECORD_SECONDS)):
+        for i in range(0, int(SAMPLE_RATE / CHUNK * 0.5)):
+            data = stream.read(CHUNK)
+        print("===录音开始===")    
+        for i in range(0, int(SAMPLE_RATE / CHUNK * (RECORD_SECONDS))):
             data = stream.read(CHUNK)
             frames.append(data)
 
-        print("录音结束!")
+        print("===录音结束!===")
         stream.stop_stream()
         stream.close()
 
@@ -246,4 +249,4 @@ def main(record=True, generate=True):
                 generator(os.path.join(in_folder, filename), out_folder)
 
 if __name__ == "__main__":
-    main(True, True)
+    main(True, False)
