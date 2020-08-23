@@ -3,6 +3,7 @@ import sys
 import argparse
 import numpy as np
 from scipy.io import wavfile
+import pathlib
 
 from audiomentations import (
     Compose,
@@ -234,6 +235,8 @@ def main(argv):
     parser.add_argument('times', type=int, help='How many time you would like to record')
     parser.add_argument('-r', "--record", help='Would you like to record?',action="store_true")
     parser.add_argument('-g', "--generate", help='Would you like to generater?',action="store_true")
+    parser.add_argument('-I', "--input", help='Input dir for source data')
+    parser.add_argument('-O', '--output', help='Output dir for generated data')
     args = parser.parse_args()
     global rec_times,label
     rec_times = args.times
@@ -246,6 +249,16 @@ def main(argv):
             os.makedirs(in_folder,exist_ok=True)
             # record audio data and save to input folder
             rec(in_folder, rec_times)
+
+    # workaround ,should be refactor !!!!!
+    if args.input is not None and args.output is not None and args.generate == True:
+        inputPath = pathlib.Path(args.input)
+        outputPath = pathlib.Path(args.output) / 'generated'
+        os.makedirs(outputPath, exist_ok=True)
+        filenames = os.listdir(inputPath)
+        for filename in filenames:
+            generator(inputPath / filename, outputPath)
+        return
 
     if args.generate == True:
         #create folder to save generated wav files
