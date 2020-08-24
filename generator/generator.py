@@ -254,10 +254,14 @@ def main(argv):
     if args.input is not None and args.output is not None and args.generate == True:
         inputPath = pathlib.Path(args.input)
         outputPath = pathlib.Path(args.output) / 'generated'
-        os.makedirs(outputPath, exist_ok=True)
-        filenames = os.listdir(inputPath)
-        for filename in filenames:
-            generator(inputPath / filename, outputPath)
+        list_subfolders_names = [f.name for f in os.scandir(inputPath) if f.is_dir()]
+        for name in list_subfolders_names:
+            subfolder_input = inputPath / name
+            subfolder_output = outputPath / name
+            os.makedirs(subfolder_output, exist_ok=True)
+            filenames = os.listdir(subfolder_input)
+            for filename in filenames:
+                generator(subfolder_input / filename, subfolder_output)
         return
 
     if args.generate == True:
