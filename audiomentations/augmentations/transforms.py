@@ -1,39 +1,61 @@
 import functools
+import os
 import random
+import sys
+import tempfile
+import uuid
+import warnings
 
 import librosa
 import numpy as np
 from scipy.signal import butter, sosfilt, convolve
 
-from audiomentations.core.transforms_interface import BasicTransform
+from audiomentations.core.audio_loading_utils import load_sound_file
+from audiomentations.core.transforms_interface import BaseWaveformTransform
 from audiomentations.core.utils import (
     calculate_rms,
     calculate_desired_noise_rms,
     get_file_paths,
+    convert_decibels_to_amplitude_ratio,
+    convert_float_samples_to_int16,
 )
 
 
-class AddImpulseResponse(BasicTransform):
+class AddImpulseResponse(BaseWaveformTransform):
     """Convolve the audio with a random impulse response.
-    Impulse responses can be created using http://tulrich.com/recording/ir_capture/
+    Impulse responses can be created using e.g. http://tulrich.com/recording/ir_capture/
     Impulse responses are represented as wav files in the given ir_path.
     """
 
-    def __init__(self, ir_path="/tmp/ir", p=0.5):
+    def __init__(
+        self,
+        ir_path="/tmp/ir",
+        p=0.5,
+        lru_cache_size=128,
+        leave_length_unchanged: bool = False,
+    ):
         """
         :param ir_path: Path to a folder that contains one or more wav files of impulse
         responses. Must be str or a Path instance.
         :param p:
+        :param lru_cache_size: Maximum size of the LRU cache for storing impulse response files
+        in memory.
+        :param leave_length_unchanged: When set to True, the tail of the sound (e.g. reverb at
+            the end) will be chopped off so that the length of the output is equal to the
+            length of the input.
         """
         super().__init__(p)
         self.ir_files = get_file_paths(ir_path)
         self.ir_files = [str(p) for p in self.ir_files]
         assert len(self.ir_files) > 0
+        self.__load_ir = functools.lru_cache(maxsize=lru_cache_size)(
+            AddImpulseResponse.__load_ir
+        )
+        self.leave_length_unchanged = leave_length_unchanged
 
     @staticmethod
-    @functools.lru_cache(maxsize=128)
     def __load_ir(file_path, sample_rate):
-        return librosa.load(file_path, sample_rate)
+        return load_sound_file(file_path, sample_rate)
 
     def randomize_parameters(self, samples, sample_rate):
         super().randomize_parameters(samples, sample_rate)
@@ -53,15 +75,28 @@ class AddImpulseResponse(BasicTransform):
         max_value = max(np.amax(signal_ir), -np.amin(signal_ir))
         scale = 0.5 / max_value
         signal_ir *= scale
-
+        if self.leave_length_unchanged:
+            signal_ir = signal_ir[..., : samples.shape[-1]]
         return signal_ir
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        warnings.warn(
+            "Warning: the LRU cache of AddImpulseResponse gets discarded when pickling it."
+            " E.g. this means the cache will be not be used when using AddImpulseResponse"
+            " together with multiprocessing on Windows"
+        )
+        del state["_AddImpulseResponse__load_ir"]
+        return state
 
-class FrequencyMask(BasicTransform):
+
+class FrequencyMask(BaseWaveformTransform):
     """
     Mask some frequency band on the spectrogram.
     Inspired by https://arxiv.org/pdf/1904.08779.pdf
     """
+
+    supports_multichannel = True
 
     def __init__(self, min_frequency_band=0.0, max_frequency_band=0.5, p=0.5):
         """
@@ -105,11 +140,13 @@ class FrequencyMask(BasicTransform):
         return samples
 
 
-class TimeMask(BasicTransform):
+class TimeMask(BaseWaveformTransform):
     """
-    Mask some time band on the spectrogram.
+    Make a randomly chosen part of the audio silent.
     Inspired by https://arxiv.org/pdf/1904.08779.pdf
     """
+
+    supports_multichannel = True
 
     def __init__(self, min_band_part=0.0, max_band_part=0.5, fade=False, p=0.5):
         """
@@ -128,7 +165,7 @@ class TimeMask(BasicTransform):
     def randomize_parameters(self, samples, sample_rate):
         super().randomize_parameters(samples, sample_rate)
         if self.parameters["should_apply"]:
-            num_samples = samples.shape[0]
+            num_samples = samples.shape[-1]
             self.parameters["t"] = random.randint(
                 int(num_samples * self.min_band_part),
                 int(num_samples * self.max_band_part),
@@ -146,12 +183,14 @@ class TimeMask(BasicTransform):
             fade_length = min(int(sample_rate * 0.01), int(t * 0.1))
             mask[0:fade_length] = np.linspace(1, 0, num=fade_length)
             mask[-fade_length:] = np.linspace(0, 1, num=fade_length)
-        new_samples[t0 : t0 + t] *= mask
+        new_samples[..., t0 : t0 + t] *= mask
         return new_samples
 
 
-class AddGaussianSNR(BasicTransform):
+class AddGaussianSNR(BaseWaveformTransform):
     """Add gaussian noise to the samples with random Signal to Noise Ratio (SNR)"""
+
+    supports_multichannel = True
 
     def __init__(self, min_SNR=0.001, max_SNR=1.0, p=0.5):
         """
@@ -173,13 +212,15 @@ class AddGaussianSNR(BasicTransform):
 
     def apply(self, samples, sample_rate):
         noise = np.random.normal(
-            0.0, self.parameters["noise_std"], size=len(samples)
+            0.0, self.parameters["noise_std"], size=samples.shape
         ).astype(np.float32)
         return samples + noise
 
 
-class AddGaussianNoise(BasicTransform):
+class AddGaussianNoise(BaseWaveformTransform):
     """Add gaussian noise to the samples"""
+
+    supports_multichannel = True
 
     def __init__(self, min_amplitude=0.001, max_amplitude=0.015, p=0.5):
         super().__init__(p)
@@ -194,13 +235,15 @@ class AddGaussianNoise(BasicTransform):
             )
 
     def apply(self, samples, sample_rate):
-        noise = np.random.randn(len(samples)).astype(np.float32)
+        noise = np.random.randn(*samples.shape).astype(np.float32)
         samples = samples + self.parameters["amplitude"] * noise
         return samples
 
 
-class TimeStretch(BasicTransform):
+class TimeStretch(BaseWaveformTransform):
     """Time stretch the signal without changing the pitch"""
+
+    supports_multichannel = True
 
     def __init__(self, min_rate=0.8, max_rate=1.25, leave_length_unchanged=True, p=0.5):
         super().__init__(p)
@@ -221,22 +264,40 @@ class TimeStretch(BasicTransform):
             self.parameters["rate"] = random.uniform(self.min_rate, self.max_rate)
 
     def apply(self, samples, sample_rate):
-        time_stretched_samples = librosa.effects.time_stretch(
-            samples, self.parameters["rate"]
-        )
+        if samples.ndim == 2:
+            # librosa's pitch_shift function doesn't natively support multichannel audio.
+            # Here we use a workaround that simply loops over the channels. It's not perfect.
+            # TODO: When librosa natively supports multichannel audio, remove our workaround
+            time_stretched_channels = []
+            for i in range(samples.shape[0]):
+                time_stretched_samples = librosa.effects.time_stretch(
+                    samples[i], self.parameters["rate"]
+                )
+                time_stretched_channels.append(time_stretched_samples)
+            time_stretched_samples = np.array(
+                time_stretched_channels, dtype=samples.dtype
+            )
+        else:
+            time_stretched_samples = librosa.effects.time_stretch(
+                samples, self.parameters["rate"]
+            )
         if self.leave_length_unchanged:
             # Apply zero padding if the time stretched audio is not long enough to fill the
             # whole space, or crop the time stretched audio if it ended up too long.
             padded_samples = np.zeros(shape=samples.shape, dtype=samples.dtype)
-            window = time_stretched_samples[: samples.shape[0]]
-            actual_window_length = len(window)  # may be smaller than samples.shape[0]
-            padded_samples[:actual_window_length] = window
+            window = time_stretched_samples[..., : samples.shape[-1]]
+            actual_window_length = window.shape[
+                -1
+            ]  # may be smaller than samples.shape[-1]
+            padded_samples[..., :actual_window_length] = window
             time_stretched_samples = padded_samples
         return time_stretched_samples
 
 
-class PitchShift(BasicTransform):
+class PitchShift(BaseWaveformTransform):
     """Pitch shift the sound up or down without changing the tempo"""
+
+    supports_multichannel = True
 
     def __init__(self, min_semitones=-4, max_semitones=4, p=0.5):
         super().__init__(p)
@@ -254,16 +315,31 @@ class PitchShift(BasicTransform):
             )
 
     def apply(self, samples, sample_rate):
-        pitch_shifted_samples = librosa.effects.pitch_shift(
-            samples, sample_rate, n_steps=self.parameters["num_semitones"]
-        )
+        if samples.ndim == 2:
+            # librosa's pitch_shift function doesn't natively support multichannel audio.
+            # Here we use a workaround that simply loops over the channels. It's not perfect.
+            # TODO: When librosa has closed the following issue, we can remove our workaround:
+            # https://github.com/librosa/librosa/issues/1085
+            pitch_shifted_samples = np.copy(samples)
+            for i in range(samples.shape[0]):
+                pitch_shifted_samples[i] = librosa.effects.pitch_shift(
+                    pitch_shifted_samples[i],
+                    sample_rate,
+                    n_steps=self.parameters["num_semitones"],
+                )
+        else:
+            pitch_shifted_samples = librosa.effects.pitch_shift(
+                samples, sample_rate, n_steps=self.parameters["num_semitones"]
+            )
         return pitch_shifted_samples
 
 
-class Shift(BasicTransform):
+class Shift(BaseWaveformTransform):
     """
-    Shift the samples forwards or backwards.
+    Shift the samples forwards or backwards, with or without rollover
     """
+
+    supports_multichannel = True
 
     def __init__(self, min_fraction=-0.5, max_fraction=0.5, rollover=True, p=0.5):
         """
@@ -287,27 +363,30 @@ class Shift(BasicTransform):
         if self.parameters["should_apply"]:
             self.parameters["num_places_to_shift"] = int(
                 round(
-                    random.uniform(self.min_fraction, self.max_fraction) * len(samples)
+                    random.uniform(self.min_fraction, self.max_fraction)
+                    * samples.shape[-1]
                 )
             )
 
     def apply(self, samples, sample_rate):
         num_places_to_shift = self.parameters["num_places_to_shift"]
-        shifted_samples = np.roll(samples, num_places_to_shift)
+        shifted_samples = np.roll(samples, num_places_to_shift, axis=-1)
         if not self.rollover:
             if num_places_to_shift > 0:
-                shifted_samples[:num_places_to_shift] = 0.0
+                shifted_samples[..., :num_places_to_shift] = 0.0
             elif num_places_to_shift < 0:
-                shifted_samples[num_places_to_shift:] = 0.0
+                shifted_samples[..., num_places_to_shift:] = 0.0
         return shifted_samples
 
 
-class Normalize(BasicTransform):
+class Normalize(BaseWaveformTransform):
     """
     Apply a constant amount of gain, so that highest signal level present in the sound becomes
     0 dBFS, i.e. the loudest level allowed if all samples must be between -1 and 1. Also known
     as peak normalization.
     """
+
+    supports_multichannel = True
 
     def __init__(self, p=0.5):
         super().__init__(p)
@@ -318,11 +397,82 @@ class Normalize(BasicTransform):
             self.parameters["max_amplitude"] = np.amax(np.abs(samples))
 
     def apply(self, samples, sample_rate):
-        normalized_samples = samples / self.parameters["max_amplitude"]
+        if self.parameters["max_amplitude"] > 0:
+            normalized_samples = samples / self.parameters["max_amplitude"]
+        else:
+            normalized_samples = samples
         return normalized_samples
 
 
-class Trim(BasicTransform):
+class LoudnessNormalization(BaseWaveformTransform):
+    """
+    Apply a constant amount of gain to match a specific loudness. This is an implementation of
+    ITU-R BS.1770-4.
+    See also:
+        https://github.com/csteinmetz1/pyloudnorm
+        https://en.wikipedia.org/wiki/Audio_normalization
+
+    Warning: This transform can return samples outside the [-1, 1] range, which may lead to
+    clipping or wrap distortion, depending on what you do with the audio in a later stage.
+    See also https://en.wikipedia.org/wiki/Clipping_(audio)#Digital_clipping
+    """
+
+    supports_multichannel = True
+
+    def __init__(self, min_lufs_in_db=-31, max_lufs_in_db=-13, p=0.5):
+        super().__init__(p)
+        # For an explanation on LUFS, see https://en.wikipedia.org/wiki/LUFS
+        self.min_lufs_in_db = min_lufs_in_db
+        self.max_lufs_in_db = max_lufs_in_db
+
+    def randomize_parameters(self, samples, sample_rate):
+        try:
+            import pyloudnorm
+        except ImportError:
+            print(
+                "Failed to import pyloudnorm. Maybe it is not installed? "
+                "To install the optional pyloudnorm dependency of audiomentations,"
+                " do `pip install audiomentations[extras]` or simply "
+                " `pip install pyloudnorm`",
+                file=sys.stderr,
+            )
+            raise
+
+        super().randomize_parameters(samples, sample_rate)
+        if self.parameters["should_apply"]:
+            meter = pyloudnorm.Meter(sample_rate)  # create BS.1770 meter
+            # transpose because pyloudnorm expects shape like (smp, chn), not (chn, smp)
+            self.parameters["loudness"] = meter.integrated_loudness(samples.transpose())
+            self.parameters["lufs_in_db"] = float(
+                random.uniform(self.min_lufs_in_db, self.max_lufs_in_db)
+            )
+
+    def apply(self, samples, sample_rate):
+        try:
+            import pyloudnorm
+        except ImportError:
+            print(
+                "Failed to import pyloudnorm. Maybe it is not installed? "
+                "To install the optional pyloudnorm dependency of audiomentations,"
+                " do `pip install audiomentations[extras]` or simply "
+                " `pip install pyloudnorm`",
+                file=sys.stderr,
+            )
+            raise
+
+        # Guard against digital silence
+        if self.parameters["loudness"] > float("-inf"):
+            # transpose because pyloudnorm expects shape like (smp, chn), not (chn, smp)
+            return pyloudnorm.normalize.loudness(
+                samples.transpose(),
+                self.parameters["loudness"],
+                self.parameters["lufs_in_db"],
+            ).transpose()
+        else:
+            return samples
+
+
+class Trim(BaseWaveformTransform):
     """
     Trim leading and trailing silence from an audio signal using librosa.effects.trim
     """
@@ -336,7 +486,7 @@ class Trim(BasicTransform):
         return samples
 
 
-class Resample(BasicTransform):
+class Resample(BaseWaveformTransform):
     """
     Resample signal using librosa.core.resample
 
@@ -371,13 +521,15 @@ class Resample(BasicTransform):
         return samples
 
 
-class ClippingDistortion(BasicTransform):
+class ClippingDistortion(BaseWaveformTransform):
     """Distort signal by clipping a random percentage of points
 
     The percentage of points that will ble clipped is drawn from a uniform distribution between
     the two input parameters min_percentile_threshold and max_percentile_threshold. If for instance
     30% is drawn, the samples are clipped if they're below the 15th or above the 85th percentile.
     """
+
+    supports_multichannel = True
 
     def __init__(self, min_percentile_threshold=0, max_percentile_threshold=40, p=0.5):
         """
@@ -410,7 +562,7 @@ class ClippingDistortion(BasicTransform):
         return samples
 
 
-class AddBackgroundNoise(BasicTransform):
+class AddBackgroundNoise(BaseWaveformTransform):
     """Mix in another sound, e.g. a background noise. Useful if your original sound is clean and
     you want to simulate an environment where background noise is present.
 
@@ -419,15 +571,26 @@ class AddBackgroundNoise(BasicTransform):
     A folder of (background noise) sounds to be mixed in must be specified. These sounds should
     ideally be at least as long as the input sounds to be transformed. Otherwise, the background
     sound will be repeated, which may sound unnatural.
+
+    Note that the gain of the added noise is relative to the amount of signal in the input. This
+    implies that if the input is completely silent, no noise will be added.
     """
 
-    def __init__(self, sounds_path=None, min_snr_in_db=3, max_snr_in_db=30, p=0.5):
+    def __init__(
+        self,
+        sounds_path=None,
+        min_snr_in_db=3,
+        max_snr_in_db=30,
+        p=0.5,
+        lru_cache_size=2,
+    ):
         """
         :param sounds_path: Path to a folder that contains sound files to randomly mix in. These
             files can be flac, mp3, ogg or wav.
         :param min_snr_in_db: Minimum signal-to-noise ratio in dB
         :param max_snr_in_db: Maximum signal-to-noise ratio in dB
         :param p:
+        :param lru_cache_size: Maximum size of the LRU cache for storing noise files in memory
         """
         super().__init__(p)
         self.sound_file_paths = get_file_paths(sounds_path)
@@ -435,11 +598,13 @@ class AddBackgroundNoise(BasicTransform):
         assert len(self.sound_file_paths) > 0
         self.min_snr_in_db = min_snr_in_db
         self.max_snr_in_db = max_snr_in_db
+        self._load_sound = functools.lru_cache(maxsize=lru_cache_size)(
+            AddBackgroundNoise._load_sound
+        )
 
     @staticmethod
-    @functools.lru_cache(maxsize=2)
-    def __load_sound(file_path, sample_rate):
-        return librosa.load(file_path, sample_rate)
+    def _load_sound(file_path, sample_rate):
+        return load_sound_file(file_path, sample_rate)
 
     def randomize_parameters(self, samples, sample_rate):
         super().randomize_parameters(samples, sample_rate)
@@ -450,7 +615,7 @@ class AddBackgroundNoise(BasicTransform):
             self.parameters["noise_file_path"] = random.choice(self.sound_file_paths)
 
             num_samples = len(samples)
-            noise_sound, _ = self.__load_sound(
+            noise_sound, _ = self._load_sound(
                 self.parameters["noise_file_path"], sample_rate
             )
 
@@ -465,15 +630,22 @@ class AddBackgroundNoise(BasicTransform):
             )
 
     def apply(self, samples, sample_rate):
-        noise_sound, _ = self.__load_sound(
+        noise_sound, _ = self._load_sound(
             self.parameters["noise_file_path"], sample_rate
         )
         noise_sound = noise_sound[
             self.parameters["noise_start_index"] : self.parameters["noise_end_index"]
         ]
 
-        clean_rms = calculate_rms(samples)
         noise_rms = calculate_rms(noise_sound)
+        if noise_rms < 1e-9:
+            warnings.warn(
+                "The file {} is too silent to be added as noise. Returning the input"
+                " unchanged.".format(self.parameters["noise_file_path"])
+            )
+            return samples
+
+        clean_rms = calculate_rms(samples)
         desired_noise_rms = calculate_desired_noise_rms(
             clean_rms, self.parameters["snr_in_db"]
         )
@@ -492,8 +664,18 @@ class AddBackgroundNoise(BasicTransform):
         # Return a mix of the input sound and the background noise sound
         return samples + noise_sound
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        warnings.warn(
+            "Warning: the LRU cache of AddBackgroundNoise gets discarded when pickling it."
+            " E.g. this means the cache will not be used when using AddBackgroundNoise together"
+            " with multiprocessing on Windows"
+        )
+        del state["_load_sound"]
+        return state
 
-class AddShortNoises(BasicTransform):
+
+class AddShortNoises(BaseWaveformTransform):
     """Mix in various (bursts of overlapping) sounds with random pauses between. Useful if your
     original sound is clean and you want to simulate an environment where short noises sometimes
     occur.
@@ -516,6 +698,7 @@ class AddShortNoises(BasicTransform):
         min_fade_out_time=0.01,
         max_fade_out_time=0.1,
         p=0.5,
+        lru_cache_size=64,
     ):
         """
         :param sounds_path: Path to a folder that contains sound files to randomly mix in. These
@@ -540,6 +723,7 @@ class AddShortNoises(BasicTransform):
         :param max_fade_out_time: Max sound/noise fade out time in seconds. Use a value larger
             than 0 to avoid a "click" at the end of the sound/noise.
         :param p: The probability of applying this transform
+        :param lru_cache_size: Maximum size of the LRU cache for storing noise files in memory
         """
         super().__init__(p)
         self.sound_file_paths = get_file_paths(sounds_path)
@@ -573,11 +757,13 @@ class AddShortNoises(BasicTransform):
         self.max_fade_in_time = max_fade_in_time
         self.min_fade_out_time = min_fade_out_time
         self.max_fade_out_time = max_fade_out_time
+        self._load_sound = functools.lru_cache(maxsize=lru_cache_size)(
+            AddShortNoises.__load_sound
+        )
 
     @staticmethod
-    @functools.lru_cache(maxsize=64)
     def __load_sound(file_path, sample_rate):
-        return librosa.load(file_path, sample_rate)
+        return load_sound_file(file_path, sample_rate)
 
     def randomize_parameters(self, samples, sample_rate):
         super().randomize_parameters(samples, sample_rate)
@@ -717,9 +903,238 @@ class AddShortNoises(BasicTransform):
                 )
 
                 # Adjust the noise to match the desired noise RMS
-                noise_samples = noise_samples * (desired_noise_rms / (noise_rms))
+                noise_samples = noise_samples * (desired_noise_rms / noise_rms)
 
                 noise_placeholder[start_sample_index:end_sample_index] += noise_samples
 
         # Return a mix of the input sound and the added sounds
         return samples + noise_placeholder
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        warnings.warn(
+            "Warning: the LRU cache of AddShortNoises gets discarded when pickling it."
+            " E.g. this means the cache will not be used when using AddShortNoises together"
+            " with multiprocessing on Windows"
+        )
+        del state["_load_sound"]
+        return state
+
+
+class PolarityInversion(BaseWaveformTransform):
+    """
+    Flip the audio samples upside-down, reversing their polarity. In other words, multiply the
+    waveform by -1, so negative values become positive, and vice versa. The result will sound
+    the same compared to the original when played back in isolation. However, when mixed with
+    other audio sources, the result may be different. This waveform inversion technique
+    is sometimes used for audio cancellation or obtaining the difference between two waveforms.
+    However, in the context of audio data augmentation, this transform can be useful when
+    training phase-aware machine learning models.
+    """
+
+    supports_multichannel = True
+
+    def __init__(self, p=0.5):
+        """
+        :param p:
+        """
+        super().__init__(p)
+
+    def randomize_parameters(self, samples, sample_rate):
+        super().randomize_parameters(samples, sample_rate)
+
+    def apply(self, samples, sample_rate):
+        return -samples
+
+
+class Gain(BaseWaveformTransform):
+    """
+    Multiply the audio by a random amplitude factor to reduce or increase the volume. This
+    technique can help a model become somewhat invariant to the overall gain of the input audio.
+
+    Warning: This transform can return samples outside the [-1, 1] range, which may lead to
+    clipping or wrap distortion, depending on what you do with the audio in a later stage.
+    See also https://en.wikipedia.org/wiki/Clipping_(audio)#Digital_clipping
+    """
+
+    supports_multichannel = True
+
+    def __init__(self, min_gain_in_db=-12, max_gain_in_db=12, p=0.5):
+        """
+        :param p:
+        """
+        super().__init__(p)
+        assert min_gain_in_db <= max_gain_in_db
+        self.min_gain_in_db = min_gain_in_db
+        self.max_gain_in_db = max_gain_in_db
+
+    def randomize_parameters(self, samples, sample_rate):
+        super().randomize_parameters(samples, sample_rate)
+        if self.parameters["should_apply"]:
+            self.parameters["amplitude_ratio"] = convert_decibels_to_amplitude_ratio(
+                random.uniform(self.min_gain_in_db, self.max_gain_in_db)
+            )
+
+    def apply(self, samples, sample_rate):
+        return samples * self.parameters["amplitude_ratio"]
+
+
+class Mp3Compression(BaseWaveformTransform):
+    """Compress the audio using an MP3 encoder to lower the audio quality.
+    This may help machine learning models deal with compressed, low-quality audio.
+
+    This transform depends on either lameenc or pydub/ffmpeg.
+
+    Note that bitrates below 32 kbps are only supported for low sample rates (up to 24000 hz).
+
+    Note: When using the lameenc backend, the output may be slightly longer than the input due
+    to the fact that the LAME encoder inserts some silence at the beginning of the audio.
+
+    Warning: This transform writes to disk, so it may be slow. Ideally, the work should be done
+    in memory. Contributions are welcome.
+    """
+
+    SUPPORTED_BITRATES = [
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56,
+        64,
+        80,
+        96,
+        112,
+        128,
+        144,
+        160,
+        192,
+        224,
+        256,
+        320,
+    ]
+
+    def __init__(
+        self, min_bitrate: int = 8, max_bitrate: int = 64, backend: str = "pydub", p=0.5
+    ):
+        """
+        :param min_bitrate: Minimum bitrate in kbps
+        :param max_bitrate: Maximum bitrate in kbps
+        :param backend: "pydub" or "lameenc".
+            Pydub may use ffmpeg under the hood.
+                Pros: Seems to avoid introducing latency in the output.
+                Cons: Slower than lameenc.
+            lameenc:
+                Pros: You can set the quality parameter in addition to bitrate.
+                Cons: Seems to introduce some silence at the start of the audio.
+        :param p: The probability of applying this transform
+        """
+        super().__init__(p)
+        assert self.SUPPORTED_BITRATES[0] <= min_bitrate <= self.SUPPORTED_BITRATES[-1]
+        assert self.SUPPORTED_BITRATES[0] <= max_bitrate <= self.SUPPORTED_BITRATES[-1]
+        assert min_bitrate <= max_bitrate
+        self.min_bitrate = min_bitrate
+        self.max_bitrate = max_bitrate
+        assert backend in ("pydub", "lameenc")
+        self.backend = backend
+
+    def randomize_parameters(self, samples, sample_rate):
+        super().randomize_parameters(samples, sample_rate)
+        if self.parameters["should_apply"]:
+            bitrate_choices = [
+                bitrate
+                for bitrate in self.SUPPORTED_BITRATES
+                if self.min_bitrate <= bitrate <= self.max_bitrate
+            ]
+            self.parameters["bitrate"] = random.choice(bitrate_choices)
+
+    def apply(self, samples, sample_rate):
+        if self.backend == "lameenc":
+            return self.apply_lameenc(samples, sample_rate)
+        elif self.backend == "pydub":
+            return self.apply_pydub(samples, sample_rate)
+        else:
+            raise Exception("Backend {} not recognized".format(self.backend))
+
+    def apply_lameenc(self, samples, sample_rate):
+        try:
+            import lameenc
+        except ImportError:
+            print(
+                "Failed to import the lame encoder. Maybe it is not installed? "
+                "To install the optional lameenc dependency of audiomentations,"
+                " do `pip install audiomentations[extras]` instead of"
+                " `pip install audiomentations`",
+                file=sys.stderr,
+            )
+            raise
+
+        assert len(samples.shape) == 1
+        assert samples.dtype == np.float32
+
+        int_samples = convert_float_samples_to_int16(samples)
+
+        encoder = lameenc.Encoder()
+        encoder.set_bit_rate(self.parameters["bitrate"])
+        encoder.set_in_sample_rate(sample_rate)
+        encoder.set_channels(1)
+        encoder.set_quality(7)  # 2 = highest, 7 = fastest
+        encoder.silence()
+
+        mp3_data = encoder.encode(int_samples.tobytes())
+        mp3_data += encoder.flush()
+
+        # Write a temporary MP3 file that will then be decoded
+        tmp_dir = tempfile.gettempdir()
+        tmp_file_path = os.path.join(
+            tmp_dir, "tmp_compressed_{}.mp3".format(str(uuid.uuid4())[0:12])
+        )
+        with open(tmp_file_path, "wb") as f:
+            f.write(mp3_data)
+
+        degraded_samples, _ = librosa.load(tmp_file_path, sample_rate)
+
+        os.unlink(tmp_file_path)
+
+        return degraded_samples
+
+    def apply_pydub(self, samples, sample_rate):
+        try:
+            import pydub
+        except ImportError:
+            print(
+                "Failed to import pydub. Maybe it is not installed? "
+                "To install the optional pydub dependency of audiomentations,"
+                " do `pip install audiomentations[extras]` instead of"
+                " `pip install audiomentations`",
+                file=sys.stderr,
+            )
+            raise
+
+        assert len(samples.shape) == 1
+        assert samples.dtype == np.float32
+
+        int_samples = convert_float_samples_to_int16(samples)
+
+        audio_segment = pydub.AudioSegment(
+            int_samples.tobytes(),
+            frame_rate=sample_rate,
+            sample_width=int_samples.dtype.itemsize,
+            channels=1,
+        )
+
+        tmp_dir = tempfile.gettempdir()
+        tmp_file_path = os.path.join(
+            tmp_dir, "tmp_compressed_{}.mp3".format(str(uuid.uuid4())[0:12])
+        )
+
+        bitrate_string = "{}k".format(self.parameters["bitrate"])
+        file_handle = audio_segment.export(tmp_file_path, bitrate=bitrate_string)
+        file_handle.close()
+
+        degraded_samples, _ = librosa.load(tmp_file_path, sample_rate)
+
+        os.unlink(tmp_file_path)
+
+        return degraded_samples

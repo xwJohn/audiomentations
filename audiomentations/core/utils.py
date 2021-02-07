@@ -1,14 +1,15 @@
-import math
 import os
 from pathlib import Path
 
+import numpy as np
+
+AUDIO_FILENAME_ENDINGS = (".aiff", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav")
+
 
 def get_file_paths(
-    root_path,
-    filename_endings=(".aiff", ".flac", ".mp3", ".ogg", ".wav"),
-    traverse_subdirectories=True,
+    root_path, filename_endings=AUDIO_FILENAME_ENDINGS, traverse_subdirectories=True
 ):
-    """Return a list of paths to all files with the given in a directory
+    """Return a list of paths to all files with the given filename extensions in a directory.
     Also traverses subdirectories by default.
     """
     file_paths = []
@@ -19,10 +20,8 @@ def get_file_paths(
             input_path = os.path.abspath(root)
             file_path = os.path.join(input_path, filename)
 
-            for ending in filename_endings:
-                if filename.endswith(ending):
-                    file_paths.append(Path(file_path))
-                    break
+            if filename.lower().endswith(filename_endings):
+                file_paths.append(Path(file_path))
         if not traverse_subdirectories:
             # prevent descending into subfolders
             break
@@ -31,9 +30,8 @@ def get_file_paths(
 
 
 def calculate_rms(samples):
-    """Given a numpy array of audio samples, return its RMS power level."""
-    chunk = pow(abs(samples), 2)
-    return math.sqrt(chunk.mean())
+    """Given a numpy array of audio samples, return its Root Mean Square (RMS)."""
+    return np.sqrt(np.mean(np.square(samples), axis=-1))
 
 
 def calculate_desired_noise_rms(clean_rms, snr):
@@ -49,3 +47,34 @@ def calculate_desired_noise_rms(clean_rms, snr):
     a = float(snr) / 20
     noise_rms = clean_rms / (10 ** a)
     return noise_rms
+
+
+def convert_decibels_to_amplitude_ratio(decibels):
+    return 10 ** (decibels / 20)
+
+
+def is_waveform_multichannel(samples):
+    """
+    Return bool that answers the question: Is the given ndarray a multichannel waveform or not?
+
+    :param samples: numpy ndarray
+    :return:
+    """
+    return len(samples.shape) > 1
+
+
+def is_spectrogram_multichannel(spectrogram):
+    """
+    Return bool that answers the question: Is the given ndarray a multichannel spectrogram?
+
+    :param samples: numpy ndarray
+    :return:
+    """
+    return len(spectrogram.shape) > 2 and spectrogram.shape[-1] > 1
+
+
+def convert_float_samples_to_int16(y):
+    """Convert floating-point numpy array of audio samples to int16."""
+    if not issubclass(y.dtype.type, np.floating):
+        raise ValueError("input samples not floating-point")
+    return (y * np.iinfo(np.int16).max).astype(np.int16)
